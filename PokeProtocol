@@ -33,14 +33,10 @@ class BattleState(Enum):
     PROCESSING_TURN = "PROCESSING_TURN"
     GAME_OVER = "GAME_OVER"
 
-class DamageCategory(Enum):
-    PHYSICAL = "PHYSICAL"
-    SPECIAL = "SPECIAL"
-
 class PokeProtocol:
     def __init__(self, host: str = "0.0.0.0", port: int = 8888, verbose: bool = False):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.settimeout(0.1)  # Non-blocking with short timeout
+        self.socket.settimeout(0.1)
         self.host = host
         self.port = port
         self.verbose = verbose
@@ -72,14 +68,16 @@ class PokeProtocol:
         # Thread control
         self.running = False
         self.receive_thread = None
+        
+        # Connection tracking
+        self.connected = False
+        self.handshake_complete = False
 
     def log(self, message: str):
-        """Log messages if verbose mode is enabled"""
         if self.verbose:
             print(f"[DEBUG] {message}")
 
     def serialize_message(self, message_type: MessageType, **kwargs) -> str:
-        """Serialize a message into key: value format"""
         lines = [f"message_type: {message_type.value}"]
         for key, value in kwargs.items():
             if value is not None:
@@ -89,7 +87,6 @@ class PokeProtocol:
         return "\n".join(lines)
 
     def parse_message(self, data: str) -> Dict[str, Any]:
-        """Parse a message from key: value format"""
         message = {}
         for line in data.split("\n"):
             if ":" in line:
@@ -97,7 +94,6 @@ class PokeProtocol:
                 key = key.strip()
                 value = value.strip()
                 
-                # Try to parse JSON objects
                 if key in ["stat_boosts", "pokemon"] and value.startswith("{"):
                     try:
                         value = json.loads(value)
@@ -108,12 +104,10 @@ class PokeProtocol:
         return message
 
     def send_message(self, message: str, address: Tuple[str, int], sequence_number: int = None):
-        """Send a message with reliability layer"""
         if sequence_number is None:
             sequence_number = self.current_sequence
             self.current_sequence += 1
             
-        # Add sequence number to message if not present
         if "sequence_number" not in message:
             message_obj = self.parse_message(message)
             message_obj["sequence_number"] = sequence_number
@@ -122,9 +116,12 @@ class PokeProtocol:
             })
         
         self.log(f"Sending to {address}: {message[:100]}...")
-        self.socket.sendto(message.encode(), address)
-        
-        # Store for retransmission (except ACKs)
+        try:
+            self.socket.sendto(message.encode(), address)
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            return
+            
         message_obj = self.parse_message(message)
         if message_obj["message_type"] != MessageType.ACK.value:
             self.pending_acks[sequence_number] = {
@@ -135,13 +132,13 @@ class PokeProtocol:
             }
 
     def send_ack(self, sequence_number: int, address: Tuple[str, int]):
-        """Send acknowledgment for a received message"""
         ack_message = self.serialize_message(MessageType.ACK, ack_number=sequence_number)
-        self.socket.sendto(ack_message.encode(), address)
-        self.log(f"Sent ACK for sequence {sequence_number}")
+        try:
+            self.socket.sendto(ack_message.encode(), address)
+        except Exception as e:
+            print(f"Error sending ACK: {e}")
 
     def handle_message(self, data: str, address: Tuple[str, int]):
-        """Handle incoming messages"""
         try:
             message = self.parse_message(data)
             self.log(f"Received from {address}: {message}")
@@ -149,18 +146,14 @@ class PokeProtocol:
             message_type = message.get("message_type")
             sequence_number = int(message.get("sequence_number", -1))
             
-            # Send ACK for non-ACK messages
             if message_type != MessageType.ACK.value:
                 self.send_ack(sequence_number, address)
             
-            # Check for duplicate messages
             if sequence_number in self.received_messages:
-                self.log(f"Duplicate message {sequence_number}, ignoring")
                 return
                 
             self.received_messages.add(sequence_number)
             
-            # Handle message based on type
             handler_name = f"handle_{message_type.lower()}"
             if hasattr(self, handler_name):
                 getattr(self, handler_name)(message, address)
@@ -171,8 +164,8 @@ class PokeProtocol:
             print(f"Error handling message: {e}")
 
     def handle_handshake_request(self, message: dict, address: Tuple[str, int]):
-        """Handle handshake request as host"""
         if self.role == PeerRole.HOST and self.battle_state == BattleState.SETUP:
+            print(f"Received connection request from {address}")
             self.opponent_address = address
             self.seed = random.randint(1, 1000000)
             random.seed(self.seed)
@@ -182,46 +175,37 @@ class PokeProtocol:
                 seed=self.seed
             )
             self.send_message(response, address)
-            self.log(f"Sent handshake response to {address}")
+            self.handshake_complete = True
+            print(f"Sent handshake response to {address}")
 
     def handle_handshake_response(self, message: dict, address: Tuple[str, int]):
-        """Handle handshake response as joiner"""
         if self.role == PeerRole.JOINER and self.battle_state == BattleState.SETUP:
+            print(f"Received handshake response from {address}")
             self.opponent_address = address
             self.seed = int(message["seed"])
             random.seed(self.seed)
-            self.log(f"Received seed: {self.seed}")
-
-    def handle_spectator_request(self, message: dict, address: Tuple[str, int]):
-        """Handle spectator connection request"""
-        if address not in self.spectators:
-            self.spectators.append(address)
-            self.log(f"Spectator connected from {address}")
+            self.handshake_complete = True
+            print(f"Handshake completed with seed: {self.seed}")
 
     def handle_battle_setup(self, message: dict, address: Tuple[str, int]):
-        """Handle battle setup message"""
-        if self.role == PeerRole.HOST:
+        if address == self.opponent_address:
             self.opponent_pokemon = message["pokemon_name"]
-            self.opponent_stat_boosts = message.get("stat_boosts", {})
+            self.connected = True
             
-            # Host goes first
-            self.is_my_turn = True
-            self.battle_state = BattleState.WAITING_FOR_MOVE
-            self.log("Battle setup complete! You go first.")
-            
-        elif self.role == PeerRole.JOINER:
-            self.opponent_pokemon = message["pokemon_name"]
-            self.battle_state = BattleState.WAITING_FOR_MOVE
-            self.log("Battle setup complete! Waiting for opponent's move...")
+            if self.role == PeerRole.HOST:
+                self.is_my_turn = True
+                self.battle_state = BattleState.WAITING_FOR_MOVE
+                print("\nBATTLE STARTED! You go first!")
+            else:
+                self.battle_state = BattleState.WAITING_FOR_MOVE
+                print("\nBATTLE STARTED! Waiting for opponent's move...")
 
     def handle_attack_announce(self, message: dict, address: Tuple[str, int]):
-        """Handle attack announcement"""
         if self.battle_state == BattleState.WAITING_FOR_MOVE and not self.is_my_turn:
             move_name = message["move_name"]
             self.current_move = move_name
-            self.log(f"Opponent used {move_name}!")
+            print(f"\nOpponent used {move_name}!")
             
-            # Send defense announce
             defense_msg = self.serialize_message(MessageType.DEFENSE_ANNOUNCE)
             self.send_message(defense_msg, self.opponent_address)
             
@@ -229,32 +213,25 @@ class PokeProtocol:
             self.process_turn()
 
     def handle_defense_announce(self, message: dict, address: Tuple[str, int]):
-        """Handle defense announcement"""
         if self.battle_state == BattleState.WAITING_FOR_MOVE and self.is_my_turn:
             self.battle_state = BattleState.PROCESSING_TURN
             self.process_turn()
 
     def handle_calculation_report(self, message: dict, address: Tuple[str, int]):
-        """Handle calculation report"""
         if self.battle_state == BattleState.PROCESSING_TURN:
-            # Compare with our calculation
             their_damage = int(message["damage_dealt"])
             their_defender_hp = int(message["defender_hp_remaining"])
             
-            # For demo purposes, we'll assume calculations match
-            # In real implementation, you'd compare with your own calculation
             confirm_msg = self.serialize_message(MessageType.CALCULATION_CONFIRM)
             self.send_message(confirm_msg, self.opponent_address)
             
-            # Update game state
             if self.is_my_turn:
                 self.opponent_hp = their_defender_hp
             else:
                 self.my_hp = their_defender_hp
                 
-            self.log(f"Turn complete. Your HP: {self.my_hp}, Opponent HP: {self.opponent_hp}")
+            print(f"Turn complete. Your HP: {self.my_hp}, Opponent HP: {self.opponent_hp}")
             
-            # Check win condition
             if self.my_hp <= 0 or self.opponent_hp <= 0:
                 self.handle_game_over()
             else:
@@ -262,25 +239,18 @@ class PokeProtocol:
                 self.battle_state = BattleState.WAITING_FOR_MOVE
 
     def handle_calculation_confirm(self, message: dict, address: Tuple[str, int]):
-        """Handle calculation confirmation"""
-        self.log("Turn confirmed by opponent")
         self.is_my_turn = not self.is_my_turn
         self.battle_state = BattleState.WAITING_FOR_MOVE
 
     def handle_chat_message(self, message: dict, address: Tuple[str, int]):
-        """Handle chat messages"""
         sender = message.get("sender_name", "Unknown")
         content_type = message.get("content_type", "TEXT")
         
         if content_type == "TEXT":
             text = message.get("message_text", "")
             print(f"\nCHAT from {sender}: {text}")
-        elif content_type == "STICKER":
-            sticker_data = message.get("sticker_data", "")
-            print(f"\nSTICKER from {sender}: [Sticker received - {len(sticker_data)} bytes]")
 
     def handle_game_over(self, message: dict = None, address: Tuple[str, int] = None):
-        """Handle game over"""
         if message:
             winner = message.get("winner")
             loser = message.get("loser")
@@ -289,7 +259,6 @@ class PokeProtocol:
             else:
                 print(f"\nDEFEAT! You lost the battle!")
         else:
-            # We're declaring game over
             if self.opponent_hp <= 0:
                 winner = self.my_pokemon
                 loser = self.opponent_pokemon
@@ -307,24 +276,8 @@ class PokeProtocol:
         
         self.battle_state = BattleState.GAME_OVER
 
-    def calculate_damage(self, move_name: str, is_special_attack: bool = False, is_special_defense: bool = False) -> dict:
-        """Calculate damage using the protocol formula"""
-        # Simplified damage calculation for demo
-        # In real implementation, use the full formula from RFC
-        
+    def calculate_damage(self, move_name: str) -> dict:
         base_damage = random.randint(20, 40)
-        
-        # Apply stat boosts
-        if is_special_attack and self.special_attack_uses > 0:
-            base_damage *= 1.5
-            self.special_attack_uses -= 1
-            self.log("Used special attack boost!")
-            
-        if is_special_defense and self.special_defense_uses > 0:
-            base_damage *= 0.7
-            self.special_defense_uses -= 1
-            self.log("Used special defense boost!")
-        
         damage = max(1, int(base_damage))
         
         if self.is_my_turn:
@@ -341,14 +294,11 @@ class PokeProtocol:
         }
 
     def process_turn(self):
-        """Process the current turn"""
         if not hasattr(self, 'current_move'):
             return
             
-        # Calculate damage
         result = self.calculate_damage(self.current_move)
         
-        # Send calculation report
         report_msg = self.serialize_message(
             MessageType.CALCULATION_REPORT,
             attacker=self.my_pokemon if self.is_my_turn else self.opponent_pokemon,
@@ -361,37 +311,18 @@ class PokeProtocol:
         self.send_message(report_msg, self.opponent_address)
 
     def start_host(self, pokemon_name: str = "Pikachu"):
-        """Start as host peer"""
         self.role = PeerRole.HOST
         self.my_pokemon = pokemon_name
-        self.socket.bind((self.host, self.port))
-        self.running = True
-        
-        print(f"Host started on {self.host}:{self.port}")
-        print(f"Your Pokémon: {pokemon_name}")
-        print("Waiting for opponent to connect...")
-        
-        # Send battle setup once connected
-        def wait_for_opponent():
-            while self.running and self.battle_state == BattleState.SETUP:
-                time.sleep(0.1)
-                
-            if self.opponent_address:
-                setup_msg = self.serialize_message(
-                    MessageType.BATTLE_SETUP,
-                    communication_mode="P2P",
-                    pokemon_name=self.my_pokemon,
-                    stat_boosts={
-                        "special_attack_uses": self.special_attack_uses,
-                        "special_defense_uses": self.special_defense_uses
-                    }
-                )
-                self.send_message(setup_msg, self.opponent_address)
-        
-        threading.Thread(target=wait_for_opponent, daemon=True).start()
+        try:
+            self.socket.bind((self.host, self.port))
+            self.running = True
+            print(f"Host started on {self.host}:{self.port}")
+            print(f"Your Pokemon: {pokemon_name}")
+            print("Waiting for opponent to connect...")
+        except Exception as e:
+            print(f"Error starting host: {e}")
 
     def start_joiner(self, host_ip: str, pokemon_name: str = "Charmander"):
-        """Start as joiner peer"""
         self.role = PeerRole.JOINER
         self.my_pokemon = pokemon_name
         self.opponent_address = (host_ip, self.port)
@@ -399,31 +330,10 @@ class PokeProtocol:
         
         print(f"Connecting to {host_ip}:{self.port} as {pokemon_name}...")
         
-        # Send handshake request
         handshake_msg = self.serialize_message(MessageType.HANDSHAKE_REQUEST)
         self.send_message(handshake_msg, self.opponent_address)
-        
-        # Send battle setup after handshake
-        def complete_handshake():
-            while self.running and self.battle_state == BattleState.SETUP:
-                time.sleep(0.1)
-                
-            if self.seed:
-                setup_msg = self.serialize_message(
-                    MessageType.BATTLE_SETUP,
-                    communication_mode="P2P",
-                    pokemon_name=self.my_pokemon,
-                    stat_boosts={
-                        "special_attack_uses": self.special_attack_uses,
-                        "special_defense_uses": self.special_defense_uses
-                    }
-                )
-                self.send_message(setup_msg, self.opponent_address)
-        
-        threading.Thread(target=complete_handshake, daemon=True).start()
 
     def send_attack(self, move_name: str):
-        """Send attack announcement"""
         if self.battle_state == BattleState.WAITING_FOR_MOVE and self.is_my_turn:
             self.current_move = move_name
             attack_msg = self.serialize_message(
@@ -431,14 +341,13 @@ class PokeProtocol:
                 move_name=move_name
             )
             self.send_message(attack_msg, self.opponent_address)
-            self.log(f"You used {move_name}!")
+            print(f"You used {move_name}!")
             return True
         else:
             print("Not your turn or invalid battle state!")
             return False
 
     def send_chat_message(self, text: str):
-        """Send chat message"""
         if self.opponent_address:
             chat_msg = self.serialize_message(
                 MessageType.CHAT_MESSAGE,
@@ -447,62 +356,69 @@ class PokeProtocol:
                 message_text=text
             )
             self.send_message(chat_msg, self.opponent_address)
-            
-            # Also send to spectators
-            for spectator in self.spectators:
-                self.send_message(chat_msg, spectator)
-                
             print(f"You: {text}")
             return True
         return False
 
+    def send_battle_setup(self):
+        """Send battle setup after handshake is complete"""
+        if self.handshake_complete and not self.connected:
+            setup_msg = self.serialize_message(
+                MessageType.BATTLE_SETUP,
+                communication_mode="P2P",
+                pokemon_name=self.my_pokemon,
+                stat_boosts={
+                    "special_attack_uses": self.special_attack_uses,
+                    "special_defense_uses": self.special_defense_uses
+                }
+            )
+            self.send_message(setup_msg, self.opponent_address)
+            self.log("Sent battle setup")
+
     def retransmit_pending(self):
-        """Retransmit pending messages that haven't been ACKed"""
         current_time = time.time()
         messages_to_remove = []
         
         for seq, pending in self.pending_acks.items():
-            if current_time - pending["timestamp"] > 0.5:  # 500ms timeout
-                if pending["retries"] < 3:  # Max 3 retries
-                    self.log(f"Retransmitting sequence {seq} (retry {pending['retries'] + 1})")
+            if current_time - pending["timestamp"] > 0.5:
+                if pending["retries"] < 3:
+                    self.log(f"Retransmitting sequence {seq}")
                     self.socket.sendto(pending["message"].encode(), pending["address"])
                     pending["timestamp"] = current_time
                     pending["retries"] += 1
                 else:
-                    self.log(f"Max retries reached for sequence {seq}, giving up")
                     messages_to_remove.append(seq)
         
         for seq in messages_to_remove:
             del self.pending_acks[seq]
 
     def receive_loop(self):
-        """Main receive loop"""
         while self.running:
             try:
                 data, addr = self.socket.recvfrom(1024)
                 message = data.decode()
                 
-                # Handle ACKs separately
                 message_obj = self.parse_message(message)
                 if message_obj.get("message_type") == MessageType.ACK.value:
                     ack_num = int(message_obj.get("ack_number", -1))
                     if ack_num in self.pending_acks:
                         del self.pending_acks[ack_num]
-                        self.log(f"Received ACK for sequence {ack_num}")
                     continue
                 
-                # Handle other messages
                 self.handle_message(message, addr)
                 
             except socket.timeout:
-                # Check for retransmissions
                 self.retransmit_pending()
+                
+                # Send battle setup if handshake is complete but not connected
+                if self.handshake_complete and not self.connected:
+                    self.send_battle_setup()
+                    
             except Exception as e:
-                if self.running:  # Only print errors if we're supposed to be running
-                    self.log(f"Receive error: {e}")
+                if self.running:
+                    pass
 
     def start(self):
-        """Start the protocol"""
         if not self.running:
             self.running = True
             self.receive_thread = threading.Thread(target=self.receive_loop, daemon=True)
@@ -510,7 +426,6 @@ class PokeProtocol:
             self.log("Protocol started")
 
     def stop(self):
-        """Stop the protocol"""
         self.running = False
         if self.receive_thread:
             self.receive_thread.join(timeout=1.0)
@@ -518,8 +433,7 @@ class PokeProtocol:
         self.log("Protocol stopped")
 
 def main():
-    """Main function to run the PokeProtocol"""
-    print("=== P2P Pokémon Battle Protocol ===")
+    print("=== P2P Pokemon Battle Protocol ===")
     print("1. Start as Host")
     print("2. Join as Client")
     
@@ -529,17 +443,36 @@ def main():
     protocol = PokeProtocol(verbose=verbose)
     
     if choice == "1":
-        pokemon = input("Enter your Pokémon name: ").strip() or "Pikachu"
+        pokemon = input("Enter your Pokemon name: ").strip() or "Pikachu"
         protocol.start_host(pokemon)
     else:
         host_ip = input("Enter host IP: ").strip() or "127.0.0.1"
-        pokemon = input("Enter your Pokémon name: ").strip() or "Charmander"
+        if ":" in host_ip:
+            host_ip = host_ip.split(":")[0].strip()
+        pokemon = input("Enter your Pokemon name: ").strip() or "Charmander"
         protocol.start_joiner(host_ip, pokemon)
     
     protocol.start()
     
     try:
+        connection_attempts = 0
+        max_attempts = 10
+        
         while protocol.running and protocol.battle_state != BattleState.GAME_OVER:
+            # Show connection status
+            if not protocol.connected:
+                if protocol.role == PeerRole.HOST:
+                    print("Waiting for opponent to connect... (Press Ctrl+C to stop)", end='\r')
+                else:
+                    connection_attempts += 1
+                    if connection_attempts > max_attempts:
+                        print("\nConnection failed! Could not connect to host.")
+                        break
+                    print(f"Connecting to host... attempt {connection_attempts}/{max_attempts}", end='\r')
+                time.sleep(1)
+                continue
+            
+            # Show battle status when connected
             print(f"\n--- Battle Status ---")
             print(f"Your HP: {protocol.my_hp} | Opponent HP: {protocol.opponent_hp}")
             print(f"Special Attacks: {protocol.special_attack_uses} | Special Defenses: {protocol.special_defense_uses}")
@@ -551,8 +484,9 @@ def main():
                     print("2. Send Chat Message")
                     print("3. Use Special Attack Boost")
                     print("4. Use Special Defense Boost")
+                    print("5. Exit")
                     
-                    action = input("Choose action (1-4): ").strip()
+                    action = input("Choose action (1-5): ").strip()
                     
                     if action == "1":
                         move = input("Enter move name: ").strip() or "Tackle"
@@ -563,24 +497,24 @@ def main():
                     elif action == "3":
                         if protocol.special_attack_uses > 0:
                             print("Special attack boost activated for next attack!")
-                            # This would be integrated into the attack logic
                         else:
                             print("No special attack boosts remaining!")
                     elif action == "4":
                         if protocol.special_defense_uses > 0:
                             print("Special defense boost activated for next defense!")
-                            # This would be integrated into the defense logic
                         else:
                             print("No special defense boosts remaining!")
+                    elif action == "5":
+                        break
                     else:
                         print("Invalid action!")
                 else:
                     print("Waiting for opponent's move...")
+                    time.sleep(2)
             else:
                 print("Processing turn...")
-            
-            time.sleep(1)
-            
+                time.sleep(2)
+                
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
