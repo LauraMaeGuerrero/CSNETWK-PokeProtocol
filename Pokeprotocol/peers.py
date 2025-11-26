@@ -195,6 +195,7 @@ class HostPeer(BasePeer):
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
             damage_dealt = int(msg.get('damage_dealt', 0))
+            defender_hp = int(msg.get('defender_hp_remaining', 0))
             
             # Validate calculation
             expected = None
@@ -204,7 +205,7 @@ class HostPeer(BasePeer):
                     expected = self.pokemon_manager.calculate_damage(
                         self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
             else:
-                # joiner attacked
+                # joiner attacked - UPDATE HOST'S OWN HP
                 if getattr(self, 'joiner_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.joiner_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
@@ -214,6 +215,16 @@ class HostPeer(BasePeer):
                 return
                 
             if expected == damage_dealt:
+                # Update HP based on who was attacked
+                if attacker == self.local_pokemon_name:
+                    # Host attacked, update joiner HP
+                    self.joiner_pokemon_row['hp'] = defender_hp
+                    self.battle_state['joiner_hp'] = defender_hp
+                else:
+                    # Joiner attacked, update host HP
+                    self.local_pokemon_row['hp'] = defender_hp
+                    self.battle_state['host_hp'] = defender_hp
+                
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
                 # FIXED: Switch turns based on who attacked
                 if attacker == self.local_pokemon_name:  # Host attacked
@@ -454,13 +465,16 @@ class JoinerPeer(BasePeer):
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
             damage_dealt = int(msg.get('damage_dealt', 0))
+            defender_hp = int(msg.get('defender_hp_remaining', 0))
             
             expected = None
             if attacker == self.local_pokemon_name:
+                # Joiner attacked
                 if getattr(self, 'host_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.local_pokemon_row, self.host_pokemon_row, MOVES.get(move_name, {}))
             else:
+                # Host attacked
                 if getattr(self, 'host_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.host_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
@@ -470,6 +484,16 @@ class JoinerPeer(BasePeer):
                 return
                 
             if expected == damage_dealt:
+                # Update HP based on who was attacked
+                if attacker == self.local_pokemon_name:
+                    # Joiner attacked, update host HP
+                    self.host_pokemon_row['hp'] = defender_hp
+                    self.battle_state['host_hp'] = defender_hp
+                else:
+                    # Host attacked, update joiner HP
+                    self.local_pokemon_row['hp'] = defender_hp
+                    self.battle_state['joiner_hp'] = defender_hp
+                
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
                 # Turn switching is now handled by host via TURN_ASSIGNMENT
             else:
