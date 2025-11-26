@@ -3,6 +3,7 @@ import sys
 from pokemon import PokemonManager, MOVES  # Added MOVES import
 from peers import HostPeer, JoinerPeer, SpectatorPeer
 from utils import color, CYAN, YELLOW, validate_sticker_data
+from network import set_verbose
 import base64
 
 
@@ -40,9 +41,13 @@ class PokeProtocolCLI:
             print("Unknown content type")
 
     def run_host(self, pname: str, port: int):
-        host = HostPeer("HostPlayer", self.pokemon_manager, pname, bind_port=port)
+        try:
+            host = HostPeer("HostPlayer", self.pokemon_manager, pname, bind_port=port)
+        except Exception as e:
+            print(f"[ERROR] Failed to create host: {e}")
+            return
         host.start_receiving()
-        print(f"[Host] hosting as {pname} on port {port}. Waiting for joiner... (Ctrl-C to stop)")
+        print(f"[Host] hosting as {pname}. Waiting for joiner... (Ctrl-C to stop)")
         
         try:
             while True:
@@ -96,8 +101,13 @@ class PokeProtocolCLI:
             print("Host stopped")
 
     def run_joiner(self, pname: str, host_ip: str, host_port: int, bind_port: int):
-        joiner = JoinerPeer("JoinerPlayer", self.pokemon_manager, pname, host_ip, host_port, bind_port)
+        try:
+            joiner = JoinerPeer("JoinerPlayer", self.pokemon_manager, pname, host_ip, host_port, bind_port)
+        except Exception as e:
+            print(f"[ERROR] Failed to create joiner: {e}")
+            return
         joiner.start_receiving()
+        print(f"[Joiner] Attempting to connect to {host_ip}:{host_port}...")
         joiner.start_handshake()
         print("[Joiner] handshake sent. Waiting for host responses. Commands: [attack|chat|status|exit]")
         
@@ -172,6 +182,15 @@ class PokeProtocolCLI:
             print("Spectator stopped")
 
     def main_menu(self):
+        # Ask for verbose mode at startup
+        verbose_choice = input("Enable verbose mode? (y/n): ").strip().lower()
+        if verbose_choice == 'y':
+            set_verbose(True)
+            print("[Verbose mode ENABLED - all messages will be printed]")
+        else:
+            set_verbose(False)
+            print("[Verbose mode DISABLED - only errors and game messages will be shown]")
+        
         while True:
             print("\n=== PokeProtocol P2P ===")
             print("1) Start as Host")

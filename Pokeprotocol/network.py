@@ -8,7 +8,17 @@ from typing import Dict, Any, Tuple, Optional
 RECV_BUFFER = 65535
 RETRANSMIT_TIMEOUT = 0.5   # seconds
 RETRANSMIT_RETRIES = 3
+VERBOSE_MODE = False  # Global verbose flag
 
+
+def set_verbose(enabled: bool):
+    global VERBOSE_MODE
+    VERBOSE_MODE = enabled
+
+def vprint(msg: str):
+    """Print only in verbose mode"""
+    if VERBOSE_MODE:
+        print(f"[VERBOSE] {msg}")
 
 class ReliableSender:
     def __init__(self, sock: socket.socket):
@@ -22,6 +32,7 @@ class ReliableSender:
         if seq is None:
             raise ValueError("Payload must contain sequence_number")
         ev = threading.Event()
+        # Register waiter BEFORE sending to avoid race condition
         with self.lock:
             self.waiters[seq] = ev
         data = json.dumps(payload).encode('utf-8')
@@ -29,15 +40,20 @@ class ReliableSender:
         while tries <= max_retries:
             try:
                 self.sock.sendto(data, addr)
+                vprint(f"SENT: {json.dumps(payload)} -> {addr}")
             except Exception as e:
-                print(f"[ReliableSender] send error: {e}")
+                print(f"[ERROR] send error: {e}")
+                with self.lock:
+                    self.waiters.pop(seq, None)
+                return False
             got = ev.wait(timeout)
             if got:
                 with self.lock:
                     self.waiters.pop(seq, None)
+                vprint(f"ACK received for seq={seq}")
                 return True
             tries += 1
-            print(f"[retransmit] seq={seq} try={tries}")
+            vprint(f"Retransmit seq={seq} try={tries}")
         with self.lock:
             self.waiters.pop(seq, None)
         return False
@@ -56,7 +72,14 @@ class BasePeer:
         self.seq_counter: Dict[str, int] = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((bind_ip, bind_port))
+        self.sock.settimeout(1.0)  # 1 second timeout for recv
+        try:
+            self.sock.bind((bind_ip, bind_port))
+            actual_port = self.sock.getsockname()[1]
+            print(f"[{name}] Bound to {bind_ip}:{actual_port}")
+        except Exception as e:
+            print(f"[ERROR] Failed to bind socket: {e}")
+            raise
         self.running = False
         self.recv_thread: Optional[threading.Thread] = None
         self.reliable = ReliableSender(self.sock)
@@ -65,6 +88,9 @@ class BasePeer:
         self.running = True
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self.recv_thread.start()
+        # Give the thread time to start
+        import time
+        time.sleep(0.1)
 
     def stop(self):
         self.running = False
@@ -79,6 +105,7 @@ class BasePeer:
                 data, addr = self.sock.recvfrom(RECV_BUFFER)
                 try:
                     msg = json.loads(data.decode('utf-8'))
+                    vprint(f"RECV: {json.dumps(msg)} <- {addr}")
                 except Exception:
                     continue
                 
@@ -87,6 +114,7 @@ class BasePeer:
                     ack = {'message_type': 'ACK', 'ack_number': msg['sequence_number']}
                     try:
                         self.sock.sendto(json.dumps(ack).encode('utf-8'), addr)
+                        vprint(f"SENT ACK: {json.dumps(ack)} -> {addr}")
                     except Exception:
                         pass
                 
@@ -100,10 +128,14 @@ class BasePeer:
                 
                 # dispatch to handler
                 threading.Thread(target=self.handle_message, args=(msg, addr), daemon=True).start()
+            except socket.timeout:
+                # Timeout is normal, just continue
+                continue
             except Exception as e:
                 if self.running:
-                    print(f"[recv_loop] error: {e}")
-                break
+                    print(f"[ERROR] recv_loop error: {e}")
+                # Don't break, continue trying
+                continue
 
     def make_seq(self) -> int:
         self.seq_counter[self.name] = self.seq_counter.get(self.name, 0) + 1
@@ -114,13 +146,17 @@ class BasePeer:
         payload['sequence_number'] = seq
         payload['from'] = self.name
         if reliable:
-            return self.reliable.send_with_ack(payload, addr)
+            success = self.reliable.send_with_ack(payload, addr)
+            if not success:
+                print(f"[ERROR] Failed to send {payload.get('message_type')} after retries")
+            return success
         else:
             try:
                 self.sock.sendto(json.dumps(payload).encode('utf-8'), addr)
+                vprint(f"SENT (unreliable): {json.dumps(payload)} -> {addr}")
                 return True
             except Exception as e:
-                print(f"[send] error: {e}")
+                print(f"[ERROR] send error: {e}")
                 return False
 
     def handle_message(self, msg: Dict[str, Any], addr: Tuple[str, int]):

@@ -1,7 +1,7 @@
 """Host, Joiner, and Spectator peer implementations"""
 import random
 from typing import Dict, Any, Tuple, Optional
-from network import BasePeer
+from network import BasePeer, VERBOSE_MODE
 from pokemon import PokemonManager, MOVES
 from utils import color, emphasize, CYAN, YELLOW, GREEN, RED, MAGENTA
 
@@ -66,18 +66,27 @@ class HostPeer(BasePeer):
     def handle_message(self, msg: Dict[str, Any], addr: Tuple[str, int]):
         mt = msg.get('message_type')
         if mt == 'HANDSHAKE_REQUEST':
-            print(f"[Host] handshake request from {addr}")
+            if not VERBOSE_MODE:
+                print(f"[Host] handshake request from {addr}")
+            else:
+                print(f"[Host] handshake request from {addr}")
             self.remote_addr = addr
             resp = {'message_type': 'HANDSHAKE_RESPONSE', 'seed': self.seed}
             self.send(resp, addr)
         elif mt == 'SPECTATOR_REQUEST':
-            print(f"[Host] spectator joined: {addr}")
+            if not VERBOSE_MODE:
+                print(f"[Host] spectator joined: {addr}")
+            else:
+                print(f"[Host] spectator joined: {addr}")
             self.remote_addr = addr
             self.peer_role = 'spectator'
             resp = {'message_type': 'HANDSHAKE_RESPONSE', 'seed': self.seed, 'role': 'spectator'}
             self.send(resp, addr)
         elif mt == 'BATTLE_SETUP':
-            print("[Host] received BATTLE_SETUP")
+            if not VERBOSE_MODE:
+                print("[Host] received BATTLE_SETUP")
+            else:
+                print("[Host] received BATTLE_SETUP")
             self.remote_addr = addr
             pdata = msg.get('pokemon', {})
             pname = msg.get('pokemon_name')
@@ -119,7 +128,10 @@ class HostPeer(BasePeer):
         
         # BATTLE MESSAGE HANDLERS
         elif mt == 'ATTACK_ANNOUNCE':
-            print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
+            if not VERBOSE_MODE:
+                print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
+            else:
+                print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
             
             # FIXED: Validate it's actually joiner's turn
             if self.battle_state['turn'] != 'joiner':
@@ -177,7 +189,8 @@ class HostPeer(BasePeer):
                     self.send(report, addr)
                     
         elif mt == 'CALCULATION_REPORT':
-            print(f"[Host] CALCULATION_REPORT received")
+            if not VERBOSE_MODE:
+                print(f"[Host] CALCULATION_REPORT received")
             display_calc_report(msg)
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
@@ -231,7 +244,8 @@ class HostPeer(BasePeer):
                 self.send(my_calc, addr)
                 
         elif mt == 'CALCULATION_CONFIRM':
-            print("[Host] CALCULATION_CONFIRM received")
+            if not VERBOSE_MODE:
+                print("[Host] CALCULATION_CONFIRM received")
             # Turn switching is now handled in CALCULATION_REPORT
             
         elif mt == 'RESOLUTION_REQUEST':
@@ -249,7 +263,8 @@ class HostPeer(BasePeer):
         # FIXED: Add TURN_ASSIGNMENT handler
         elif mt == 'TURN_ASSIGNMENT':
             new_turn = msg.get('current_turn')
-            print(f"[Host] Received turn assignment: {new_turn}")
+            if not VERBOSE_MODE:
+                print(f"[Host] Received turn assignment: {new_turn}")
             self.battle_state['turn'] = new_turn
             self.print_turn_state()
             
@@ -297,7 +312,7 @@ class HostPeer(BasePeer):
 class JoinerPeer(BasePeer):
     def __init__(self, name: str, pokemon_manager: PokemonManager, pokemon_name: str, 
                  host_ip: str, host_port: int, bind_port: int = 0):
-        super().__init__(name, bind_port=bind_port)
+        super().__init__(name, '0.0.0.0', bind_port)
         self.pokemon_manager = pokemon_manager
         if pokemon_name not in pokemon_manager.pokemon_db:
             raise ValueError(f"Pokemon '{pokemon_name}' not found")
@@ -322,7 +337,10 @@ class JoinerPeer(BasePeer):
     def handle_message(self, msg: Dict[str, Any], addr: Tuple[str, int]):
         mt = msg.get('message_type')
         if mt == 'HANDSHAKE_RESPONSE':
-            print(f"[Joiner] handshake response seed={msg.get('seed')}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] handshake response seed={msg.get('seed')}")
+            else:
+                print(f"[Joiner] handshake response seed={msg.get('seed')}")
             self.remote_addr = addr
             seed = msg.get('seed')
             random.seed(seed)
@@ -346,7 +364,10 @@ class JoinerPeer(BasePeer):
             print("[Joiner] sent BATTLE_SETUP")
             
         elif mt == 'BATTLE_SETUP':
-            print("[Joiner] received host BATTLE_SETUP")
+            if not VERBOSE_MODE:
+                print("[Joiner] received host BATTLE_SETUP")
+            else:
+                print("[Joiner] received host BATTLE_SETUP")
             pdata = msg.get('pokemon', {})
             pname = msg.get('pokemon_name')
             self.battle_state['host_hp'] = int(pdata.get('hp', 0))
@@ -362,14 +383,18 @@ class JoinerPeer(BasePeer):
         # FIXED: Add TURN_ASSIGNMENT handler
         elif mt == 'TURN_ASSIGNMENT':
             new_turn = msg.get('current_turn')
-            print(f"[Joiner] Received turn assignment: {new_turn}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] Received turn assignment: {new_turn}")
             self.battle_state['turn'] = new_turn
             self.print_turn_state()
             
         # BATTLE MESSAGE HANDLERS
         elif mt == 'ATTACK_ANNOUNCE':
             move_name = msg.get('move_name')
-            print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
+            else:
+                print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
             
             # FIXED: Validate it's actually host's turn
             if self.battle_state['turn'] != 'host':
@@ -423,7 +448,8 @@ class JoinerPeer(BasePeer):
                     self.send(report, addr)
                     
         elif mt == 'CALCULATION_REPORT':
-            print(f"[Joiner] CALCULATION_REPORT received")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] CALCULATION_REPORT received")
             display_calc_report(msg)
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
@@ -457,7 +483,8 @@ class JoinerPeer(BasePeer):
                 self.send(my_calc, addr)
                 
         elif mt == 'CALCULATION_CONFIRM':
-            print("[Joiner] CALCULATION_CONFIRM received")
+            if not VERBOSE_MODE:
+                print("[Joiner] CALCULATION_CONFIRM received")
             # Turn switching is now handled by host via TURN_ASSIGNMENT
             
         elif mt == 'RESOLUTION_REQUEST':
