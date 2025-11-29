@@ -309,12 +309,13 @@ class HostPeer(BasePeer):
             self.print_turn_state()
             
         elif mt == 'GAME_OVER':
-            winner = msg.get('winner', 'Unknown')
-            reason = msg.get('reason', 'Battle ended')
-            print(color(emphasize(f"\n=== GAME OVER ==="), RED))
-            print(color(f"Winner: {winner}", GREEN))
-            print(color(reason, YELLOW))
-            self.battle_state['game_over'] = True
+            if not self.battle_state.get('game_over'):
+                winner = msg.get('winner', 'Unknown')
+                reason = msg.get('reason', 'Battle ended')
+                print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                print(color(f"Winner: {winner}", GREEN))
+                print(color(reason, YELLOW))
+                self.battle_state['game_over'] = True
             
         # CHAT MESSAGE HANDLER
         elif mt == 'CHAT_MESSAGE':
@@ -577,12 +578,13 @@ class JoinerPeer(BasePeer):
                 print(f"[CHAT] {sender}: [Unknown message type]")
                 
         elif mt == 'GAME_OVER':
-            winner = msg.get('winner', 'Unknown')
-            reason = msg.get('reason', 'Battle ended')
-            print(color(emphasize(f"\n=== GAME OVER ==="), RED))
-            print(color(f"Winner: {winner}", GREEN))
-            print(color(reason, YELLOW))
-            self.battle_state['game_over'] = True
+            if not self.battle_state.get('game_over'):
+                winner = msg.get('winner', 'Unknown')
+                reason = msg.get('reason', 'Battle ended')
+                print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                print(color(f"Winner: {winner}", GREEN))
+                print(color(reason, YELLOW))
+                self.battle_state['game_over'] = True
         else:
             print(f"[Joiner] unhandled: {mt}")
 

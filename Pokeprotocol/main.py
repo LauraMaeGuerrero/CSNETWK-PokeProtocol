@@ -52,11 +52,19 @@ class PokeProtocolCLI:
         try:
             while True:
                 if host.battle_state.get('game_over'):
+                    import time
+                    time.sleep(2)
                     host.stop()
                     print("\nReturning to main menu...")
                     break
                 print(color("Available host commands: attack | chat | status | exit", CYAN))
                 cmd = input("Host command: ").strip().lower()
+                if host.battle_state.get('game_over'):
+                    import time
+                    time.sleep(2)
+                    host.stop()
+                    print("\nReturning to main menu...")
+                    break
                 if cmd == 'status':
                     print("Battle state:", host.battle_state)
                     print("Local Pokemon HP:", host.local_pokemon_row.get('hp'))
@@ -118,11 +126,19 @@ class PokeProtocolCLI:
         try:
             while True:
                 if joiner.battle_state.get('game_over'):
+                    import time
+                    time.sleep(2)
                     joiner.stop()
                     print("\nReturning to main menu...")
                     break
                 print(color("Available joiner commands: attack | chat | status | exit", CYAN))
                 cmd = input("Joiner command: ").strip().lower()
+                if joiner.battle_state.get('game_over'):
+                    import time
+                    time.sleep(2)
+                    joiner.stop()
+                    print("\nReturning to main menu...")
+                    break
                 if cmd == 'attack':
                     if joiner.battle_state.get('turn') != 'joiner':
                         print(color("It's not your turn! Wait for opponent.", YELLOW))
