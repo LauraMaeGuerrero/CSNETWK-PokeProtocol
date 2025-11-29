@@ -142,6 +142,8 @@ class BasePeer:
         return self.seq_counter[self.name]
 
     def send(self, payload: Dict[str, Any], addr: Tuple[str, int], reliable: bool = True) -> bool:
+        if not self.running:
+            return False
         seq = self.make_seq()
         payload['sequence_number'] = seq
         payload['from'] = self.name
