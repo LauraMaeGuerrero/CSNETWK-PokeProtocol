@@ -226,6 +226,33 @@ class HostPeer(BasePeer):
                     self.battle_state['host_hp'] = defender_hp
                 
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
+                
+                # Check for game over conditions
+                if self.local_pokemon_row['hp'] <= 0:
+                    winner = self.joiner_pokemon_name or 'Joiner'
+                    game_over_msg = {
+                        'message_type': 'GAME_OVER',
+                        'winner': winner,
+                        'reason': f"{self.local_pokemon_name} fainted!"
+                    }
+                    self.send(game_over_msg, addr)
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {winner}", GREEN))
+                    print(color(f"{self.local_pokemon_name} fainted!", RED))
+                    return
+                elif self.joiner_pokemon_row and self.joiner_pokemon_row['hp'] <= 0:
+                    winner = self.local_pokemon_name
+                    game_over_msg = {
+                        'message_type': 'GAME_OVER',
+                        'winner': winner,
+                        'reason': f"{self.joiner_pokemon_name} fainted!"
+                    }
+                    self.send(game_over_msg, addr)
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {winner}", GREEN))
+                    print(color(f"{self.joiner_pokemon_name} fainted!", RED))
+                    return
+                
                 # FIXED: Switch turns based on who attacked
                 if attacker == self.local_pokemon_name:  # Host attacked
                     self.battle_state['turn'] = 'joiner'
@@ -280,7 +307,11 @@ class HostPeer(BasePeer):
             self.print_turn_state()
             
         elif mt == 'GAME_OVER':
-            print(f"[Host] GAME_OVER: {msg}")
+            winner = msg.get('winner', 'Unknown')
+            reason = msg.get('reason', 'Battle ended')
+            print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+            print(color(f"Winner: {winner}", GREEN))
+            print(color(reason, YELLOW))
             self.stop()
             
         # CHAT MESSAGE HANDLER
@@ -495,6 +526,19 @@ class JoinerPeer(BasePeer):
                     self.battle_state['joiner_hp'] = defender_hp
                 
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
+                
+                # Check for game over conditions
+                if self.local_pokemon_row['hp'] <= 0:
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {self.host_pokemon_name or 'Host'}", GREEN))
+                    print(color(f"{self.local_pokemon_name} fainted!", RED))
+                    return
+                elif self.host_pokemon_row and self.host_pokemon_row['hp'] <= 0:
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {self.local_pokemon_name}", GREEN))
+                    print(color(f"{self.host_pokemon_name} fainted!", RED))
+                    return
+                
                 # Turn switching is now handled by host via TURN_ASSIGNMENT
             else:
                 print(f"[Joiner] Damage mismatch: expected {expected}, got {damage_dealt}")
@@ -529,7 +573,11 @@ class JoinerPeer(BasePeer):
                 print(f"[CHAT] {sender}: [Unknown message type]")
                 
         elif mt == 'GAME_OVER':
-            print("[Joiner] game over:", msg)
+            winner = msg.get('winner', 'Unknown')
+            reason = msg.get('reason', 'Battle ended')
+            print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+            print(color(f"Winner: {winner}", GREEN))
+            print(color(reason, YELLOW))
             self.stop()
         else:
             print(f"[Joiner] unhandled: {mt}")
