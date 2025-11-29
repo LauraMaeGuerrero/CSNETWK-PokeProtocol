@@ -1,7 +1,7 @@
 """Host, Joiner, and Spectator peer implementations"""
 import random
 from typing import Dict, Any, Tuple, Optional
-from network import BasePeer
+from network import BasePeer, VERBOSE_MODE
 from pokemon import PokemonManager, MOVES
 from utils import color, emphasize, CYAN, YELLOW, GREEN, RED, MAGENTA
 
@@ -66,18 +66,27 @@ class HostPeer(BasePeer):
     def handle_message(self, msg: Dict[str, Any], addr: Tuple[str, int]):
         mt = msg.get('message_type')
         if mt == 'HANDSHAKE_REQUEST':
-            print(f"[Host] handshake request from {addr}")
+            if not VERBOSE_MODE:
+                print(f"[Host] handshake request from {addr}")
+            else:
+                print(f"[Host] handshake request from {addr}")
             self.remote_addr = addr
             resp = {'message_type': 'HANDSHAKE_RESPONSE', 'seed': self.seed}
             self.send(resp, addr)
         elif mt == 'SPECTATOR_REQUEST':
-            print(f"[Host] spectator joined: {addr}")
+            if not VERBOSE_MODE:
+                print(f"[Host] spectator joined: {addr}")
+            else:
+                print(f"[Host] spectator joined: {addr}")
             self.remote_addr = addr
             self.peer_role = 'spectator'
             resp = {'message_type': 'HANDSHAKE_RESPONSE', 'seed': self.seed, 'role': 'spectator'}
             self.send(resp, addr)
         elif mt == 'BATTLE_SETUP':
-            print("[Host] received BATTLE_SETUP")
+            if not VERBOSE_MODE:
+                print("[Host] received BATTLE_SETUP")
+            else:
+                print("[Host] received BATTLE_SETUP")
             self.remote_addr = addr
             pdata = msg.get('pokemon', {})
             pname = msg.get('pokemon_name')
@@ -119,7 +128,10 @@ class HostPeer(BasePeer):
         
         # BATTLE MESSAGE HANDLERS
         elif mt == 'ATTACK_ANNOUNCE':
-            print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
+            if not VERBOSE_MODE:
+                print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
+            else:
+                print(f"[Host] ATTACK_ANNOUNCE from joiner: {msg.get('move_name')}")
             
             # FIXED: Validate it's actually joiner's turn
             if self.battle_state['turn'] != 'joiner':
@@ -177,11 +189,13 @@ class HostPeer(BasePeer):
                     self.send(report, addr)
                     
         elif mt == 'CALCULATION_REPORT':
-            print(f"[Host] CALCULATION_REPORT received")
+            if not VERBOSE_MODE:
+                print(f"[Host] CALCULATION_REPORT received")
             display_calc_report(msg)
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
             damage_dealt = int(msg.get('damage_dealt', 0))
+            defender_hp = int(msg.get('defender_hp_remaining', 0))
             
             # Validate calculation
             expected = None
@@ -191,7 +205,7 @@ class HostPeer(BasePeer):
                     expected = self.pokemon_manager.calculate_damage(
                         self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
             else:
-                # joiner attacked
+                # joiner attacked - UPDATE HOST'S OWN HP
                 if getattr(self, 'joiner_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.joiner_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
@@ -201,7 +215,46 @@ class HostPeer(BasePeer):
                 return
                 
             if expected == damage_dealt:
+                # Update HP based on who was attacked
+                if attacker == self.local_pokemon_name:
+                    # Host attacked, update joiner HP
+                    self.joiner_pokemon_row['hp'] = defender_hp
+                    self.battle_state['joiner_hp'] = defender_hp
+                else:
+                    # Joiner attacked, update host HP
+                    self.local_pokemon_row['hp'] = defender_hp
+                    self.battle_state['host_hp'] = defender_hp
+                
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
+                
+                # Check for game over conditions AFTER sending confirm
+                if self.local_pokemon_row['hp'] <= 0:
+                    winner = self.joiner_pokemon_name or 'Joiner'
+                    game_over_msg = {
+                        'message_type': 'GAME_OVER',
+                        'winner': winner,
+                        'reason': f"{self.local_pokemon_name} fainted!"
+                    }
+                    self.send(game_over_msg, addr)
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {winner}", GREEN))
+                    print(color(f"{self.local_pokemon_name} fainted!", RED))
+                    self.battle_state['game_over'] = True
+                    return
+                elif self.joiner_pokemon_row and self.joiner_pokemon_row['hp'] <= 0:
+                    winner = self.local_pokemon_name
+                    game_over_msg = {
+                        'message_type': 'GAME_OVER',
+                        'winner': winner,
+                        'reason': f"{self.joiner_pokemon_name} fainted!"
+                    }
+                    self.send(game_over_msg, addr)
+                    print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                    print(color(f"Winner: {winner}", GREEN))
+                    print(color(f"{self.joiner_pokemon_name} fainted!", RED))
+                    self.battle_state['game_over'] = True
+                    return
+                
                 # FIXED: Switch turns based on who attacked
                 if attacker == self.local_pokemon_name:  # Host attacked
                     self.battle_state['turn'] = 'joiner'
@@ -231,7 +284,8 @@ class HostPeer(BasePeer):
                 self.send(my_calc, addr)
                 
         elif mt == 'CALCULATION_CONFIRM':
-            print("[Host] CALCULATION_CONFIRM received")
+            if not VERBOSE_MODE:
+                print("[Host] CALCULATION_CONFIRM received")
             # Turn switching is now handled in CALCULATION_REPORT
             
         elif mt == 'RESOLUTION_REQUEST':
@@ -249,13 +303,19 @@ class HostPeer(BasePeer):
         # FIXED: Add TURN_ASSIGNMENT handler
         elif mt == 'TURN_ASSIGNMENT':
             new_turn = msg.get('current_turn')
-            print(f"[Host] Received turn assignment: {new_turn}")
+            if not VERBOSE_MODE:
+                print(f"[Host] Received turn assignment: {new_turn}")
             self.battle_state['turn'] = new_turn
             self.print_turn_state()
             
         elif mt == 'GAME_OVER':
-            print(f"[Host] GAME_OVER: {msg}")
-            self.stop()
+            if not self.battle_state.get('game_over'):
+                winner = msg.get('winner', 'Unknown')
+                reason = msg.get('reason', 'Battle ended')
+                print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                print(color(f"Winner: {winner}", GREEN))
+                print(color(reason, YELLOW))
+                self.battle_state['game_over'] = True
             
         # CHAT MESSAGE HANDLER
         elif mt == 'CHAT_MESSAGE':
@@ -297,7 +357,7 @@ class HostPeer(BasePeer):
 class JoinerPeer(BasePeer):
     def __init__(self, name: str, pokemon_manager: PokemonManager, pokemon_name: str, 
                  host_ip: str, host_port: int, bind_port: int = 0):
-        super().__init__(name, bind_port=bind_port)
+        super().__init__(name, '0.0.0.0', bind_port)
         self.pokemon_manager = pokemon_manager
         if pokemon_name not in pokemon_manager.pokemon_db:
             raise ValueError(f"Pokemon '{pokemon_name}' not found")
@@ -322,7 +382,10 @@ class JoinerPeer(BasePeer):
     def handle_message(self, msg: Dict[str, Any], addr: Tuple[str, int]):
         mt = msg.get('message_type')
         if mt == 'HANDSHAKE_RESPONSE':
-            print(f"[Joiner] handshake response seed={msg.get('seed')}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] handshake response seed={msg.get('seed')}")
+            else:
+                print(f"[Joiner] handshake response seed={msg.get('seed')}")
             self.remote_addr = addr
             seed = msg.get('seed')
             random.seed(seed)
@@ -346,7 +409,10 @@ class JoinerPeer(BasePeer):
             print("[Joiner] sent BATTLE_SETUP")
             
         elif mt == 'BATTLE_SETUP':
-            print("[Joiner] received host BATTLE_SETUP")
+            if not VERBOSE_MODE:
+                print("[Joiner] received host BATTLE_SETUP")
+            else:
+                print("[Joiner] received host BATTLE_SETUP")
             pdata = msg.get('pokemon', {})
             pname = msg.get('pokemon_name')
             self.battle_state['host_hp'] = int(pdata.get('hp', 0))
@@ -362,14 +428,18 @@ class JoinerPeer(BasePeer):
         # FIXED: Add TURN_ASSIGNMENT handler
         elif mt == 'TURN_ASSIGNMENT':
             new_turn = msg.get('current_turn')
-            print(f"[Joiner] Received turn assignment: {new_turn}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] Received turn assignment: {new_turn}")
             self.battle_state['turn'] = new_turn
             self.print_turn_state()
             
         # BATTLE MESSAGE HANDLERS
         elif mt == 'ATTACK_ANNOUNCE':
             move_name = msg.get('move_name')
-            print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
+            else:
+                print(f"[Joiner] ATTACK_ANNOUNCE from host: {move_name}")
             
             # FIXED: Validate it's actually host's turn
             if self.battle_state['turn'] != 'host':
@@ -423,18 +493,22 @@ class JoinerPeer(BasePeer):
                     self.send(report, addr)
                     
         elif mt == 'CALCULATION_REPORT':
-            print(f"[Joiner] CALCULATION_REPORT received")
+            if not VERBOSE_MODE:
+                print(f"[Joiner] CALCULATION_REPORT received")
             display_calc_report(msg)
             attacker = msg.get('attacker')
             move_name = msg.get('move_used')
             damage_dealt = int(msg.get('damage_dealt', 0))
+            defender_hp = int(msg.get('defender_hp_remaining', 0))
             
             expected = None
             if attacker == self.local_pokemon_name:
+                # Joiner attacked
                 if getattr(self, 'host_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.local_pokemon_row, self.host_pokemon_row, MOVES.get(move_name, {}))
             else:
+                # Host attacked
                 if getattr(self, 'host_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.host_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
@@ -444,7 +518,32 @@ class JoinerPeer(BasePeer):
                 return
                 
             if expected == damage_dealt:
+                # Update HP based on who was attacked
+                if attacker == self.local_pokemon_name:
+                    # Joiner attacked, update host HP
+                    self.host_pokemon_row['hp'] = defender_hp
+                    self.battle_state['host_hp'] = defender_hp
+                else:
+                    # Host attacked, update joiner HP
+                    self.local_pokemon_row['hp'] = defender_hp
+                    self.battle_state['joiner_hp'] = defender_hp
+                
+                # Check for game over conditions FIRST
+                if self.local_pokemon_row['hp'] <= 0 or (self.host_pokemon_row and self.host_pokemon_row['hp'] <= 0):
+                    # Don't send CALCULATION_CONFIRM on game over, host will detect and send GAME_OVER
+                    if self.local_pokemon_row['hp'] <= 0:
+                        print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                        print(color(f"Winner: {self.host_pokemon_name or 'Host'}", GREEN))
+                        print(color(f"{self.local_pokemon_name} fainted!", RED))
+                    else:
+                        print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                        print(color(f"Winner: {self.local_pokemon_name}", GREEN))
+                        print(color(f"{self.host_pokemon_name} fainted!", RED))
+                    self.battle_state['game_over'] = True
+                    return
+                
                 self.send({'message_type': 'CALCULATION_CONFIRM'}, addr)
+                
                 # Turn switching is now handled by host via TURN_ASSIGNMENT
             else:
                 print(f"[Joiner] Damage mismatch: expected {expected}, got {damage_dealt}")
@@ -457,7 +556,8 @@ class JoinerPeer(BasePeer):
                 self.send(my_calc, addr)
                 
         elif mt == 'CALCULATION_CONFIRM':
-            print("[Joiner] CALCULATION_CONFIRM received")
+            if not VERBOSE_MODE:
+                print("[Joiner] CALCULATION_CONFIRM received")
             # Turn switching is now handled by host via TURN_ASSIGNMENT
             
         elif mt == 'RESOLUTION_REQUEST':
@@ -478,8 +578,13 @@ class JoinerPeer(BasePeer):
                 print(f"[CHAT] {sender}: [Unknown message type]")
                 
         elif mt == 'GAME_OVER':
-            print("[Joiner] game over:", msg)
-            self.stop()
+            if not self.battle_state.get('game_over'):
+                winner = msg.get('winner', 'Unknown')
+                reason = msg.get('reason', 'Battle ended')
+                print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+                print(color(f"Winner: {winner}", GREEN))
+                print(color(reason, YELLOW))
+                self.battle_state['game_over'] = True
         else:
             print(f"[Joiner] unhandled: {mt}")
 

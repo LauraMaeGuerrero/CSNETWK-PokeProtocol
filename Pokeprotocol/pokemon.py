@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from utils import safe_float, safe_int
 
 # Configuration
-CSV_PATH = "pokemon.csv"
+CSV_PATH = os.path.join(os.path.dirname(__file__), "pokemon.csv")
 
 # Minimal test moveset
 MOVES = {
@@ -21,7 +21,9 @@ MOVES = {
 
 
 class PokemonManager:
-    def __init__(self, csv_path: str = CSV_PATH):
+    def __init__(self, csv_path: str = None):
+        if csv_path is None:
+            csv_path = CSV_PATH
         self.csv_path = csv_path
         self.pokemon_db = self.load_pokemon(csv_path)
         self.moves_by_pokemon = self.generate_movesets(self.pokemon_db, MOVES)
