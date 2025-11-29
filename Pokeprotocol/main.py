@@ -51,6 +51,10 @@ class PokeProtocolCLI:
         
         try:
             while True:
+                if host.battle_state.get('game_over'):
+                    host.stop()
+                    print("\nReturning to main menu...")
+                    break
                 print(color("Available host commands: attack | chat | status | exit", CYAN))
                 cmd = input("Host command: ").strip().lower()
                 if cmd == 'status':
@@ -113,6 +117,10 @@ class PokeProtocolCLI:
         
         try:
             while True:
+                if joiner.battle_state.get('game_over'):
+                    joiner.stop()
+                    print("\nReturning to main menu...")
+                    break
                 print(color("Available joiner commands: attack | chat | status | exit", CYAN))
                 cmd = input("Joiner command: ").strip().lower()
                 if cmd == 'attack':
