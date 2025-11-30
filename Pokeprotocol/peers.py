@@ -225,12 +225,12 @@ class HostPeer(BasePeer):
             # Validate calculation
             expected = None
             if attacker == self.local_pokemon_name:
-                # host attacked
+                # host attacked - this is joiner's report back to us
                 if getattr(self, 'joiner_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
             else:
-                # joiner attacked - UPDATE HOST'S OWN HP
+                # joiner attacked - this is our own report we sent
                 if getattr(self, 'joiner_pokemon_row', None):
                     expected = self.pokemon_manager.calculate_damage(
                         self.joiner_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
@@ -286,21 +286,10 @@ class HostPeer(BasePeer):
                     self.battle_state['game_over'] = True
                     return
                 
-                # FIXED: Switch turns based on who attacked
-                if attacker == self.local_pokemon_name:  # Host attacked
-                    self.battle_state['turn'] = 'joiner'
-                    # Notify joiner it's their turn
-                    turn_msg = {
-                        'message_type': 'TURN_ASSIGNMENT',
-                        'current_turn': 'joiner'
-                    }
-                    self.send(turn_msg, addr)
-                    # Broadcast to spectators
-                    for spec in self.spectators:
-                        self.send(turn_msg, spec)
-                else:  # Joiner attacked
+                # FIXED: Only switch turns when receiving joiner's report (joiner attacked us)
+                # When we attacked, we already sent the report and will switch on CALCULATION_CONFIRM
+                if attacker != self.local_pokemon_name:  # Joiner attacked
                     self.battle_state['turn'] = 'host'
-                    # Notify joiner it's host's turn
                     turn_msg = {
                         'message_type': 'TURN_ASSIGNMENT', 
                         'current_turn': 'host'
@@ -309,7 +298,7 @@ class HostPeer(BasePeer):
                     # Broadcast to spectators
                     for spec in self.spectators:
                         self.send(turn_msg, spec)
-                self.print_turn_state()
+                    self.print_turn_state()
             else:
                 print(f"[Host] Damage mismatch: expected {expected}, got {damage_dealt}")
                 my_calc = {
@@ -323,7 +312,18 @@ class HostPeer(BasePeer):
         elif mt == 'CALCULATION_CONFIRM':
             if not VERBOSE_MODE:
                 print("[Host] CALCULATION_CONFIRM received")
-            # Turn switching is now handled in CALCULATION_REPORT
+            # Switch turn to joiner after host's attack is confirmed
+            if self.battle_state['turn'] == 'host':
+                self.battle_state['turn'] = 'joiner'
+                turn_msg = {
+                    'message_type': 'TURN_ASSIGNMENT',
+                    'current_turn': 'joiner'
+                }
+                self.send(turn_msg, addr)
+                # Broadcast to spectators
+                for spec in self.spectators:
+                    self.send(turn_msg, spec)
+                self.print_turn_state()
             
         elif mt == 'RESOLUTION_REQUEST':
             print(f"[Host] RESOLUTION_REQUEST: {msg}")
