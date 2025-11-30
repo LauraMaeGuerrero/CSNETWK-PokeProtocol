@@ -235,17 +235,16 @@ class HostPeer(BasePeer):
             damage_dealt = int(msg.get('damage_dealt', 0))
             defender_hp = int(msg.get('defender_hp_remaining', 0))
             
-            # Only process reports from joiner (when host attacked)
-            # Ignore our own reports (when joiner attacked)
-            if attacker != self.local_pokemon_name:
-                # This is our own report that we sent, ignore it
+            # Determine if this is joiner's validation of host's attack or host's own report
+            if attacker == self.local_pokemon_name:
+                # Host attacked - this is joiner's validation report
+                expected = None
+                if getattr(self, 'joiner_pokemon_row', None):
+                    expected = self.pokemon_manager.calculate_damage(
+                        self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
+            else:
+                # Joiner attacked - this is our own report, ignore it
                 return
-            
-            # Validate calculation - this is joiner's report back to us
-            expected = None
-            if getattr(self, 'joiner_pokemon_row', None):
-                expected = self.pokemon_manager.calculate_damage(
-                    self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
             
             if expected is None:
                 print("[Host] cannot validate calculation_report (missing data)")
@@ -299,7 +298,8 @@ class HostPeer(BasePeer):
                     return
                 
                 # Track that host attacked for turn switching in CALCULATION_CONFIRM
-                self.last_attacker = self.local_pokemon_name
+                if attacker == self.local_pokemon_name:
+                    self.last_attacker = self.local_pokemon_name
             else:
                 print(f"[Host] Damage mismatch: expected {expected}, got {damage_dealt}")
                 my_calc = {
