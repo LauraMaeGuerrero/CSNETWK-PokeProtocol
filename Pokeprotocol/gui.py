@@ -1293,16 +1293,16 @@ class PokeGUI(tk.Tk):
     def set_verbose_mode(self, enabled):
         """Set verbose mode"""
         try:
-            from network import set_verbose
-            set_verbose(enabled)
+            import network
+            network.set_verbose(enabled)
             self.verbose_mode.set(enabled)
             status = "ON" if enabled else "OFF"
             
             if hasattr(self, 'verbose_status_label'):
                 self.verbose_status_label.config(text=f"Verbose: {status}")
             print(f"[SYSTEM] Verbose mode {status}")
-        except ImportError:
-            print("Could not set verbose mode")
+        except Exception as e:
+            print(f"Could not set verbose mode: {e}")
 
     def console_log(self, message, verbose_only=False):
         """Print to console based on verbose mode"""

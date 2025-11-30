@@ -14,6 +14,10 @@ VERBOSE_MODE = False  # Global verbose flag
 def set_verbose(enabled: bool):
     global VERBOSE_MODE
     VERBOSE_MODE = enabled
+    print(f"[NETWORK] Verbose mode {'ENABLED' if enabled else 'DISABLED'}")
+
+def get_verbose() -> bool:
+    return VERBOSE_MODE
 
 def vprint(msg: str):
     """Print only in verbose mode"""
