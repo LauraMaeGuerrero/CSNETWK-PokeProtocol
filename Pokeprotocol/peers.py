@@ -59,6 +59,7 @@ class HostPeer(BasePeer):
         self.joiner_pokemon_name: Optional[str] = None
         self.joiner_pokemon_row: Optional[Dict[str, Any]] = None
         self.last_announced_move: Optional[str] = None
+        self.spectators = []  # List of spectator addresses
 
     def available_moves(self) -> list:
         return self.pokemon_manager.get_moves_for_pokemon(self.local_pokemon_name)
@@ -78,10 +79,21 @@ class HostPeer(BasePeer):
                 print(f"[Host] spectator joined: {addr}")
             else:
                 print(f"[Host] spectator joined: {addr}")
-            self.remote_addr = addr
-            self.peer_role = 'spectator'
+            self.spectators.append(addr)
             resp = {'message_type': 'HANDSHAKE_RESPONSE', 'seed': self.seed, 'role': 'spectator'}
             self.send(resp, addr)
+            # Send current battle state to spectator
+            if self.joiner_pokemon_row:
+                self.send({
+                    'message_type': 'BATTLE_SETUP',
+                    'pokemon_name': self.joiner_pokemon_name,
+                    'pokemon': self.joiner_pokemon_row
+                }, addr)
+                self.send({
+                    'message_type': 'BATTLE_SETUP',
+                    'pokemon_name': self.local_pokemon_name,
+                    'pokemon': self.local_pokemon_row
+                }, addr)
         elif mt == 'BATTLE_SETUP':
             if not VERBOSE_MODE:
                 print("[Host] received BATTLE_SETUP")
@@ -124,6 +136,10 @@ class HostPeer(BasePeer):
                 'current_turn': 'host'  # Host starts first
             }
             self.send(turn_msg, addr)
+            # Broadcast to spectators
+            for spec in self.spectators:
+                self.send(my_setup, spec)
+                self.send(turn_msg, spec)
             self.print_turn_state()
         
         # BATTLE MESSAGE HANDLERS
@@ -141,6 +157,9 @@ class HostPeer(BasePeer):
             # Defender (host) should send DEFENSE_ANNOUNCE
             resp = {'message_type': 'DEFENSE_ANNOUNCE'}
             self.send(resp, addr)
+            # Broadcast attack to spectators
+            for spec in self.spectators:
+                self.send(msg, spec)
             
             # Compute damage: attacker is joiner, defender is host
             move_name = msg.get('move_name')
@@ -163,6 +182,9 @@ class HostPeer(BasePeer):
                     'status_message': f"{self.local_pokemon_name} was hit by {move_name} for {damage} dmg"
                 }
                 self.send(report, addr)
+                # Broadcast to spectators
+                for spec in self.spectators:
+                    self.send(report, spec)
                 
         elif mt == 'DEFENSE_ANNOUNCE':
             # Host was the attacker; remote acknowledged and is ready
@@ -187,6 +209,9 @@ class HostPeer(BasePeer):
                         'status_message': f"{self.local_pokemon_name} used {move_name}!"
                     }
                     self.send(report, addr)
+                    # Broadcast to spectators
+                    for spec in self.spectators:
+                        self.send(report, spec)
                     
         elif mt == 'CALCULATION_REPORT':
             if not VERBOSE_MODE:
@@ -236,6 +261,9 @@ class HostPeer(BasePeer):
                         'reason': f"{self.local_pokemon_name} fainted!"
                     }
                     self.send(game_over_msg, addr)
+                    # Broadcast to spectators
+                    for spec in self.spectators:
+                        self.send(game_over_msg, spec)
                     print(color(emphasize(f"\n=== GAME OVER ==="), RED))
                     print(color(f"Winner: {winner}", GREEN))
                     print(color(f"{self.local_pokemon_name} fainted!", RED))
@@ -249,6 +277,9 @@ class HostPeer(BasePeer):
                         'reason': f"{self.joiner_pokemon_name} fainted!"
                     }
                     self.send(game_over_msg, addr)
+                    # Broadcast to spectators
+                    for spec in self.spectators:
+                        self.send(game_over_msg, spec)
                     print(color(emphasize(f"\n=== GAME OVER ==="), RED))
                     print(color(f"Winner: {winner}", GREEN))
                     print(color(f"{self.joiner_pokemon_name} fainted!", RED))
@@ -264,6 +295,9 @@ class HostPeer(BasePeer):
                         'current_turn': 'joiner'
                     }
                     self.send(turn_msg, addr)
+                    # Broadcast to spectators
+                    for spec in self.spectators:
+                        self.send(turn_msg, spec)
                 else:  # Joiner attacked
                     self.battle_state['turn'] = 'host'
                     # Notify joiner it's host's turn
@@ -272,6 +306,9 @@ class HostPeer(BasePeer):
                         'current_turn': 'host'
                     }
                     self.send(turn_msg, addr)
+                    # Broadcast to spectators
+                    for spec in self.spectators:
+                        self.send(turn_msg, spec)
                 self.print_turn_state()
             else:
                 print(f"[Host] Damage mismatch: expected {expected}, got {damage_dealt}")
@@ -614,6 +651,10 @@ class SpectatorPeer(BasePeer):
         super().__init__(name, bind_port=bind_port)
         self.pokemon_manager = pokemon_manager
         self.host_addr = (host_ip, host_port)
+        self.host_pokemon_name = None
+        self.joiner_pokemon_name = None
+        self.host_hp = None
+        self.joiner_hp = None
 
     def join_as_spectator(self):
         print("[Spectator] sending SPECTATOR_REQUEST")
@@ -623,6 +664,39 @@ class SpectatorPeer(BasePeer):
         mt = msg.get('message_type')
         if mt == 'HANDSHAKE_RESPONSE' and msg.get('role') == 'spectator':
             print("[Spectator] joined as spectator")
+        elif mt == 'BATTLE_SETUP':
+            pname = msg.get('pokemon_name')
+            pdata = msg.get('pokemon', {})
+            hp = pdata.get('hp')
+            if not self.host_pokemon_name:
+                self.host_pokemon_name = pname
+                self.host_hp = hp
+                print(f"[Spectator] Host Pokemon: {pname} (HP: {hp})")
+            else:
+                self.joiner_pokemon_name = pname
+                self.joiner_hp = hp
+                print(f"[Spectator] Joiner Pokemon: {pname} (HP: {hp})")
+        elif mt == 'TURN_ASSIGNMENT':
+            turn = msg.get('current_turn')
+            print(color(f"[Spectator] Turn: {turn.upper()}", CYAN))
+        elif mt == 'ATTACK_ANNOUNCE':
+            move = msg.get('move_name')
+            print(color(f"[Spectator] Attack announced: {move}", YELLOW))
+        elif mt == 'CALCULATION_REPORT':
+            display_calc_report(msg)
+            defender_hp = msg.get('defender_hp_remaining')
+            attacker = msg.get('attacker')
+            if attacker == self.host_pokemon_name:
+                self.joiner_hp = defender_hp
+            else:
+                self.host_hp = defender_hp
+            print(f"[Spectator] Current HP - Host: {self.host_hp}, Joiner: {self.joiner_hp}")
+        elif mt == 'GAME_OVER':
+            winner = msg.get('winner', 'Unknown')
+            reason = msg.get('reason', 'Battle ended')
+            print(color(emphasize(f"\n=== GAME OVER ==="), RED))
+            print(color(f"Winner: {winner}", GREEN))
+            print(color(reason, YELLOW))
         elif mt == 'CHAT_MESSAGE':
             sender = msg.get('sender_name', 'Unknown')
             content_type = msg.get('content_type')
@@ -634,4 +708,5 @@ class SpectatorPeer(BasePeer):
             else:
                 print(f"[CHAT] {sender}: [Unknown message type]")
         else:
-            print(f"[Spectator] observed: {mt}")
+            if VERBOSE_MODE:
+                print(f"[Spectator] observed: {mt}")
