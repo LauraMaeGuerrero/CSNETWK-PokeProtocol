@@ -59,6 +59,7 @@ class HostPeer(BasePeer):
         self.joiner_pokemon_name: Optional[str] = None
         self.joiner_pokemon_row: Optional[Dict[str, Any]] = None
         self.last_announced_move: Optional[str] = None
+        self.last_attacker: Optional[str] = None  # Track who attacked last
         self.spectators = []  # List of spectator addresses
 
     def available_moves(self) -> list:
@@ -286,8 +287,10 @@ class HostPeer(BasePeer):
                     self.battle_state['game_over'] = True
                     return
                 
-                # FIXED: Only switch turns when receiving joiner's report (joiner attacked us)
-                # When we attacked, we already sent the report and will switch on CALCULATION_CONFIRM
+                # Track who attacked for turn switching in CALCULATION_CONFIRM
+                self.last_attacker = attacker
+                
+                # Only switch turns when receiving joiner's report (joiner attacked us)
                 if attacker != self.local_pokemon_name:  # Joiner attacked
                     self.battle_state['turn'] = 'host'
                     turn_msg = {
@@ -312,8 +315,8 @@ class HostPeer(BasePeer):
         elif mt == 'CALCULATION_CONFIRM':
             if not VERBOSE_MODE:
                 print("[Host] CALCULATION_CONFIRM received")
-            # Switch turn to joiner after host's attack is confirmed
-            if self.battle_state['turn'] == 'host':
+            # Switch turn to joiner only if host was the last attacker
+            if self.last_attacker == self.local_pokemon_name:
                 self.battle_state['turn'] = 'joiner'
                 turn_msg = {
                     'message_type': 'TURN_ASSIGNMENT',
@@ -324,6 +327,7 @@ class HostPeer(BasePeer):
                 for spec in self.spectators:
                     self.send(turn_msg, spec)
                 self.print_turn_state()
+                self.last_attacker = None
             
         elif mt == 'RESOLUTION_REQUEST':
             print(f"[Host] RESOLUTION_REQUEST: {msg}")
