@@ -196,6 +196,7 @@ class HostPeer(BasePeer):
                 self.send(turn_msg, addr)
                 for spec in self.spectators:
                     self.send(turn_msg, spec)
+                self.last_attacker = None  # Clear to prevent incorrect turn switch
                 self.print_turn_state()
                 
         elif mt == 'DEFENSE_ANNOUNCE':
