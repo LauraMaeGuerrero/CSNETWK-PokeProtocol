@@ -187,6 +187,17 @@ class HostPeer(BasePeer):
                 for spec in self.spectators:
                     self.send(report, spec)
                 
+                # Switch turn to host after joiner's attack
+                self.battle_state['turn'] = 'host'
+                turn_msg = {
+                    'message_type': 'TURN_ASSIGNMENT',
+                    'current_turn': 'host'
+                }
+                self.send(turn_msg, addr)
+                for spec in self.spectators:
+                    self.send(turn_msg, spec)
+                self.print_turn_state()
+                
         elif mt == 'DEFENSE_ANNOUNCE':
             # Host was the attacker; remote acknowledged and is ready
             move_name = getattr(self, 'last_announced_move', None)
@@ -223,18 +234,17 @@ class HostPeer(BasePeer):
             damage_dealt = int(msg.get('damage_dealt', 0))
             defender_hp = int(msg.get('defender_hp_remaining', 0))
             
-            # Validate calculation
+            # Only process reports from joiner (when host attacked)
+            # Ignore our own reports (when joiner attacked)
+            if attacker != self.local_pokemon_name:
+                # This is our own report that we sent, ignore it
+                return
+            
+            # Validate calculation - this is joiner's report back to us
             expected = None
-            if attacker == self.local_pokemon_name:
-                # host attacked - this is joiner's report back to us
-                if getattr(self, 'joiner_pokemon_row', None):
-                    expected = self.pokemon_manager.calculate_damage(
-                        self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
-            else:
-                # joiner attacked - this is our own report we sent
-                if getattr(self, 'joiner_pokemon_row', None):
-                    expected = self.pokemon_manager.calculate_damage(
-                        self.joiner_pokemon_row, self.local_pokemon_row, MOVES.get(move_name, {}))
+            if getattr(self, 'joiner_pokemon_row', None):
+                expected = self.pokemon_manager.calculate_damage(
+                    self.local_pokemon_row, self.joiner_pokemon_row, MOVES.get(move_name, {}))
             
             if expected is None:
                 print("[Host] cannot validate calculation_report (missing data)")
@@ -287,21 +297,8 @@ class HostPeer(BasePeer):
                     self.battle_state['game_over'] = True
                     return
                 
-                # Track who attacked for turn switching in CALCULATION_CONFIRM
-                self.last_attacker = attacker
-                
-                # Only switch turns when receiving joiner's report (joiner attacked us)
-                if attacker != self.local_pokemon_name:  # Joiner attacked
-                    self.battle_state['turn'] = 'host'
-                    turn_msg = {
-                        'message_type': 'TURN_ASSIGNMENT', 
-                        'current_turn': 'host'
-                    }
-                    self.send(turn_msg, addr)
-                    # Broadcast to spectators
-                    for spec in self.spectators:
-                        self.send(turn_msg, spec)
-                    self.print_turn_state()
+                # Track that host attacked for turn switching in CALCULATION_CONFIRM
+                self.last_attacker = self.local_pokemon_name
             else:
                 print(f"[Host] Damage mismatch: expected {expected}, got {damage_dealt}")
                 my_calc = {
